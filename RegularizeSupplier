@@ -1,0 +1,110 @@
+#!/usr/bin/perl
+#
+
+#Load an Altium BOM, and put each supplier + supplier PN in it's own column
+#In and out are CSV BOMs
+
+use Text::CSV;
+use Data::Dumper qw(Dumper);
+
+my $file = shift(@ARGV);
+my $csv=Text::CSV->new({ binary => 1, eol => $/ });
+open my $io, "<",$file or die("$file: $!");
+open my $out,">-" or die("Can't open stdout");
+
+
+my $row=$csv->getline($io);
+my @fieldNames=@$row;
+my @items=();
+my @itemSuppliers=();
+my @isuppIX=();
+my @isuppPNIX=();
+my %suppliers=();
+my %replaceField=();
+our $nsuppliers=0;
+
+for (my $j=0; $j<=$#fieldNames; $j++) {
+  my $f=$fieldNames[$j];
+  if ($f =~/Supplier ([0-9]+)/) {
+    $isuppIX[$1]=$j;
+    $replaceField{$j}=1;
+  }
+  if ($f =~/Supplier Part Number ([0-9]+)/) {
+    $isuppPNIX[$1]=$j;
+    $replaceField{$j}=1;
+  }
+}
+
+my $trash=$csv->getline($io);
+
+my $item=0;
+while($row=$csv->getline($io)) {
+  #my @fields=@$row;
+  $items[$item]=$row;
+  regularize($item);
+  $item++;
+}
+$nsuppliers=scalar(keys(%suppliers));
+my %ix2supplier=reverse(%suppliers);
+
+printHeader();
+for (my $item; $item<=$#items; $item++) {
+  printRow($item);
+}
+exit;
+
+
+
+sub regularize {
+  my $item=shift;
+
+  my @row = @{$items[$item]};
+  #Find all supplier names and part numbers. If it's a new supplier, add to the supplier list,
+  #replace supplier/PN with hash
+  my %rowSuppliers=();
+  for (my $j=0; $j<=$#isuppIX; $j++) {
+    if (defined($isuppIX[$j])) {
+      my $supplier=$row[$isuppIX[$j]];
+      my $suppPN=$row[$isuppPNIX[$j]];
+      if (! defined($suppliers{$supplier})) {
+        $suppliers{$supplier}=scalar(keys(%suppliers)) if (length($supplier));
+      }
+      $rowSuppliers{$supplier}=$suppPN;
+    }
+  }
+  $itemSuppliers[$item]=\%rowSuppliers;
+}
+
+sub printHeader {
+  my @outRow=();
+  for (my $j=0; $j<=$#fieldNames; $j++) {
+    push(@outRow,$fieldNames[$j]) if (! defined($replaceField{$j}));
+  }
+  for ($j=1; $j<=$nsuppliers; $j++) {
+    push(@outRow,sprintf("Supplier %d",$j));
+    push(@outRow,sprintf("Supplier Part Number %d",$j));
+  }
+  $csv->print($out,\@outRow);
+}
+
+sub printRow {
+  my $item=shift;
+
+  my @outRow=();
+  for (my $j=0; $j<=$#fieldNames; $j++) {
+    push(@outRow,$items[$item][$j]) if (! defined($replaceField{$j}));
+  }
+  for ($j=0; $j<$nsuppliers; $j++) {
+    my $supplier=$ix2supplier{"$j"};
+    if (defined($itemSuppliers[$item]->{$supplier})) {
+      push(@outRow,$supplier);
+      push(@outRow,$itemSuppliers[$item]->{$supplier});
+    } else {
+      push(@outRow,"");
+      push(@outRow,"");
+    }
+  }
+
+  $csv->print($out,\@outRow);
+}
+

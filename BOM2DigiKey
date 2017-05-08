@@ -1,0 +1,128 @@
+#!/usr/bin/perl
+#
+
+#Load an Altium BOM, and output one that's easy to upload to digikey
+#In and out are CSV BOMs
+
+use Text::CSV;
+use Data::Dumper qw(Dumper);
+
+my $file = shift(@ARGV);
+my $csv = Text::CSV->new( { binary => 1, eol => $/ } );
+
+open my $io, "<", $file or die("$file: $!");
+open my $out, ">-" or die("Can't open stdout");
+
+my $wantedSupplier = "Digi-Key";
+my @wantedCols = ( "Quantity", "Designator", "Value", "Description", "Footprint" );
+
+my @isuppIX              = ();
+my @isuppPNIX            = ();
+my $manufacturerColumn   = 0;
+my $manufacturerPNColumn = 0;
+my $PartNumberColumn     = 0;
+my @mfgrIX               = ();
+my @mfgrPNIX             = ();
+my %fieldIX              = ();
+
+#First let's get the field names
+my $row        = $csv->getline($io);
+my @fieldNames = @$row;
+
+#Make a hash of field names ...
+for ( my $j = 0 ; $j <= $#fieldNames ; $j++ ) {
+  my $f = $fieldNames[$j];
+  $fieldIX{$f} = $j;
+}
+
+#Find the supplier columns ...
+for ( my $j = 0 ; $j <= $#fieldNames ; $j++ ) {
+  my $f = $fieldNames[$j];
+  if ( $f =~ /Supplier ([0-9]+)/ ) {
+    $isuppIX[$1] = $j;
+  }
+  if ( $f =~ /Supplier Part Number ([0-9]+)/ ) {
+    $isuppPNIX[$1] = $j;
+  }
+}
+
+#Find the indexed manufacturer columns ...
+for ( my $j = 0 ; $j <= $#fieldNames ; $j++ ) {
+  my $f = $fieldNames[$j];
+  if ( $f =~ /Manufacturer ([0-9]+)/ ) {
+    $mfgrIX[$1] = $j;
+    next;
+  }
+  if ( $f =~ /Manufacturer Part Number ([0-9]+)/ ) {
+    $mfgrPNIX[$1] = $j;
+    next;
+  }
+}
+
+my @colHdr = ( "Item", "Supplier", "SupplierPN", "Manufacturer", "ManufacturerPN", @wantedCols );
+$csv->print( $out, \@colHdr );
+
+my $item = 1;
+while ( $row = $csv->getline($io) ) {
+  #my @fields=@$row;
+  #$items[$item] = $row;
+  my $supplierPN = findSupplierPN( $wantedSupplier, $row );
+  my ( $mfgr, $mpn ) = findMfgrandPN($row);
+  my @outRow = ( $item, $wantedSupplier, $supplierPN, $mfgr, $mpn );
+  foreach my $f (@wantedCols) {
+    my $ix = $fieldIX{$f};
+    push( @outRow, $row->[$ix] );
+  }
+  $csv->print( $out, \@outRow );
+  $item++;
+}
+
+sub findSupplierPN {
+  my $wanted = shift;
+  my $row    = shift;
+
+  my $retval = "";
+  for ( my $j = 0 ; $j <= scalar(@isuppIX) ; $j++ ) {
+    my $nm = $row->[ $isuppIX[$j] ];
+    if ( $nm eq $wanted ) {
+      $retval = $row->[ $isuppPNIX[$j] ];
+      last;
+    }
+  }
+  return ($retval);
+}
+
+sub findMfgrandPN {
+  my $row = shift;
+
+  my $mfgr = trim( $row->[ $fieldIX{Manufacturer} ] );
+  my $mpn  = "";
+  if ( length($mfgr) ) {
+    $mpn = trim( $row->[ $fieldIX{"Manufacturer PN"} ] );
+    return ( $mfgr, $mpn ) if ( length($mpn) );
+    $mpn = trim( $row->[ $fieldIX{"ManufacturerPN"} ] );
+    return ($mfgr, $mpn ) if ( length($mpn) );
+    $mpn = trim( $row->[ $fieldIX{"PartNumber"} ] );
+    return ( $mfgr, $mpn );
+  }
+
+  #OK First try didn't work ... look at indexed manufacturer fields
+  for ( my $k = 0 ; $k <= scalar(@mfgrIX) ; $k++ ) {
+    $mfgr = trim( $row->[ $mfgrIX[$k] ] );
+    if ( length($mfgr) ) {
+      $mpn = trim( $row->[ $mfgrPNIX[$k] ] );
+      return ( $mfgr, $mpn );
+    }
+  }
+
+  return ( "", "" );
+}
+
+sub trim {
+  my $instr = shift;
+
+  $instr =~ s/^\s+//g;
+  $instr =~ s/\s+$//g;
+
+  return ($instr);
+}
